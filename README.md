@@ -4,7 +4,7 @@ A sophisticated 30-day progress tracker and habit builder designed with a modern
 
 ## 📥 Download APK
 
-[![Download APK](https://img.shields.io/badge/Download-APK-4CAF50?style=for-the-badge&logo=android&logoColor=white&color=4CAF50)](https://monthly-todo-planner.netlify.app/todo.apk)
+[![Download APK](https://img.shields.io/badge/Download-APK-4CAF50?style=for-the-badge&logo=android&logoColor=white&color=4CAF50)](https://github.com/Atifhasan250/monthly-todo-planner/releases/download/v1.0.0/todo.apk)
 
 Or click here: 👉 [https://monthly-todo-planner.netlify.app/todo.apk](https://monthly-todo-planner.netlify.app/todo.apk)
 

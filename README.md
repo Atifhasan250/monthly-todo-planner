@@ -2,6 +2,13 @@
 
 A sophisticated 30-day progress tracker and habit builder designed with a modern **Liquid Glass UI** (iOS 26+ style). This application helps users maintain consistency through structured weekly tasks and automated daily habit tracking.
 
+## 📥 Download APK
+
+[![Download APK](https://img.shields.io/badge/Download-APK-4CAF50?style=for-the-badge&logo=android&logoColor=white&color=4CAF50)](https://monthly-todo-planner.netlify.app/todo.apk)
+
+Or click here: 👉 [https://monthly-todo-planner.netlify.app/todo.apk](https://monthly-todo-planner.netlify.app/todo.apk)
+
+
 ## 🌟 Key Features
 
 - **Daily Habit Tracking**: Monitor your routines with a 30-day visual history grid.
@@ -23,7 +30,7 @@ A sophisticated 30-day progress tracker and habit builder designed with a modern
 
 1. **Clone the Repository**
    ```bash
-   git clone https://github.com/yourusername/monthly-todo-planner.git
+   git clone https://github.com/Atifhasan250/monthly-todo-planner.git
    cd monthly-todo-planner
    ```
 

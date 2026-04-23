@@ -1,10 +1,11 @@
-import React, { useState } from "react";
+import React, { useState, useRef } from "react";
 import { View, StyleSheet, Pressable, Modal, Alert, Platform } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useHeaderHeight } from "@react-navigation/elements";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import * as WebBrowser from "expo-web-browser";
+import Animated, { useSharedValue, useAnimatedStyle, withSpring } from "react-native-reanimated";
 
 import { KeyboardAwareScrollViewCompat } from "@/components/KeyboardAwareScrollViewCompat";
 import { ThemedText } from "@/components/ThemedText";
@@ -18,11 +19,31 @@ export default function SettingsScreen() {
   const headerHeight = useHeaderHeight();
   const [showResetModal, setShowResetModal] = useState(false);
   const [showReminderModal, setShowReminderModal] = useState(false);
-  const [reminderSettings, setReminderSettings] = useState<ReminderSettings>({ useDefault: true, customReminders: [] });
+  const [reminderSettings, setReminderSettings] = useState<ReminderSettings>({ useDefault: false, customReminders: [] });
+  
+  // BUG 1: Use ref to always read the latest reminderSettings (avoids stale closure)
+  const reminderSettingsRef = useRef<ReminderSettings>(reminderSettings);
+  reminderSettingsRef.current = reminderSettings;
+
+  // UX 5: Animated toggle
+  const thumbPosition = useSharedValue(reminderSettings.useDefault ? 20 : 0);
+  const thumbStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: withSpring(thumbPosition.value, { damping: 15, stiffness: 200 }) }],
+  }));
+  const toggleBgStyle = useAnimatedStyle(() => ({
+    backgroundColor: withSpring(thumbPosition.value > 10 ? 1 : 0, { damping: 15 }) === 1 
+      ? AppColors.primary 
+      : AppColors.border,
+  }));
 
   React.useEffect(() => {
     loadSettings();
   }, []);
+
+  // UX 5: Update thumb position when settings change
+  React.useEffect(() => {
+    thumbPosition.value = reminderSettings.useDefault ? 20 : 0;
+  }, [reminderSettings.useDefault]);
 
   const loadSettings = async () => {
     const settings = await getReminderSettings();
@@ -30,8 +51,8 @@ export default function SettingsScreen() {
   };
 
   const toggleReminderMode = async () => {
-    const newUseDefault = !reminderSettings.useDefault;
-    const newSettings = { ...reminderSettings, useDefault: newUseDefault };
+    const newUseDefault = !reminderSettingsRef.current.useDefault;
+    const newSettings = { ...reminderSettingsRef.current, useDefault: newUseDefault };
     
     // Update local state immediately for UI responsiveness
     setReminderSettings(newSettings);
@@ -61,10 +82,11 @@ export default function SettingsScreen() {
       }
       await saveReminders(updatedDefaults);
     } else {
-      // Use custom reminders
+      // Use custom reminders — read latest from ref to avoid stale closure
+      const latestSettings = reminderSettingsRef.current;
       const { saveReminders } = await import("@/lib/storage");
       const updatedCustom = [];
-      for (const r of newSettings.customReminders) {
+      for (const r of latestSettings.customReminders) {
         if (r.isActive) {
           const notificationId = await scheduleReminderNotification(r);
           updatedCustom.push({ ...r, notificationId: notificationId || undefined });
@@ -76,21 +98,22 @@ export default function SettingsScreen() {
     }
   };
 
-  const handleOpenCustomReminders = () => {
-    // Navigate to reminders modal but with settings context
-    // For now, since we only have one modal, we can just use that
-    // or we can add a new UI section. User asked for "add reminders for themselves"
-    // I'll update the ReminderModal to be accessible from here too
-    setShowResetModal(false); // Close any open modals
-  };
-
   const handleReset = async () => {
     await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
     setShowResetModal(true);
   };
 
+  // BUG 6: Cancel all notifications before reset
   const confirmReset = async () => {
     try {
+      // BUG 6: Cancel all existing scheduled notifications before clearing data
+      const existingReminders = await getReminders();
+      for (const r of existingReminders) {
+        if (r.notificationId) {
+          await cancelReminderNotification(r.notificationId);
+        }
+      }
+      
       await resetAllData();
       
       // Re-initialize default reminders after reset if that was the mode
@@ -119,7 +142,9 @@ export default function SettingsScreen() {
     }
   };
 
+  // SECURITY 3: Validate URLs before opening with WebBrowser
   const openLink = async (url: string) => {
+    if (!url.startsWith('https://')) return;
     await WebBrowser.openBrowserAsync(url);
   };
 
@@ -196,8 +221,9 @@ export default function SettingsScreen() {
                 {reminderSettings.useDefault ? "Default (6 AM & 10 PM)" : (reminderSettings.customReminders.length > 0 ? "Custom Reminders" : "Default (6 AM & 10 PM)")}
               </ThemedText>
             </View>
+            {/* UX 5: Animated toggle */}
             <View style={[styles.toggle, reminderSettings.useDefault && styles.toggleActive]}>
-              <View style={[styles.toggleThumb, reminderSettings.useDefault && styles.toggleThumbActive]} />
+              <Animated.View style={[styles.toggleThumb, thumbStyle]} />
             </View>
           </Pressable>
           {!reminderSettings.useDefault && (
@@ -225,20 +251,32 @@ export default function SettingsScreen() {
         onAddReminder={async (reminder) => {
           const { addReminder } = await import("@/lib/storage");
           const updated = await addReminder(reminder);
-          setReminderSettings(prev => ({ ...prev, customReminders: updated }));
-          await saveReminderSettings({ ...reminderSettings, customReminders: updated });
+          // BUG 1: Use functional state update and ref to avoid stale closure
+          setReminderSettings(prev => {
+            const newSettings = { ...prev, customReminders: updated };
+            saveReminderSettings(newSettings);
+            return newSettings;
+          });
         }}
         onUpdateReminder={async (id, updates) => {
           const { updateReminder } = await import("@/lib/storage");
           const updated = await updateReminder(id, updates);
-          setReminderSettings(prev => ({ ...prev, customReminders: updated }));
-          await saveReminderSettings({ ...reminderSettings, customReminders: updated });
+          // BUG 1: Use functional state update
+          setReminderSettings(prev => {
+            const newSettings = { ...prev, customReminders: updated };
+            saveReminderSettings(newSettings);
+            return newSettings;
+          });
         }}
         onDeleteReminder={async (id) => {
           const { deleteReminder } = await import("@/lib/storage");
           const updated = await deleteReminder(id);
-          setReminderSettings(prev => ({ ...prev, customReminders: updated }));
-          await saveReminderSettings({ ...reminderSettings, customReminders: updated });
+          // BUG 1: Use functional state update
+          setReminderSettings(prev => {
+            const newSettings = { ...prev, customReminders: updated };
+            saveReminderSettings(newSettings);
+            return newSettings;
+          });
         }}
       />
 
@@ -248,13 +286,13 @@ export default function SettingsScreen() {
           <SettingItem
             icon="information-circle-outline"
             title="Version"
-            subtitle="1.0.0"
+            subtitle="1.1.0"
           />
           <SettingItem
             icon="person-outline"
             title="Developer"
             subtitle="Atif Hasan"
-            onPress={() => openLink("https://atifs-info.vercel.app/")}
+            onPress={() => openLink("https://atifs-portfolio.vercel.app/")}
           />
           <SettingItem
             icon="globe-outline"
@@ -480,9 +518,6 @@ const styles = StyleSheet.create({
     height: 20,
     borderRadius: 10,
     backgroundColor: "#fff",
-  },
-  toggleThumbActive: {
-    transform: [{ translateX: 20 }],
   },
   cancelBtn: {
     backgroundColor: AppColors.border,

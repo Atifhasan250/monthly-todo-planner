@@ -46,7 +46,7 @@ export default function MainTabNavigator() {
               style={StyleSheet.absoluteFill}
             />
           ) : null,
-        ...screenOptions,
+        ...(screenOptions as any),
       }}
     >
       <Tab.Screen

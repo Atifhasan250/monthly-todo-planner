@@ -14,6 +14,7 @@ interface HabitCardProps {
   today: string;
   last30Days: string[];
   onToggleHabit: (habitId: string) => void;
+  onCompleteAllHabits: (habitIds: string[]) => void;
   onEditHabit: (habitId: string, label: string) => void;
   onDeleteHabit: (habitId: string) => void;
   onAddHabit: (label: string) => void;
@@ -23,12 +24,14 @@ interface HabitCardProps {
   reminderCount: number;
 }
 
-export function HabitCard({
+// PERF 1: Wrapped in React.memo to prevent unnecessary re-renders
+export const HabitCard = React.memo(function HabitCard({
   habits,
   history,
   today,
   last30Days,
   onToggleHabit,
+  onCompleteAllHabits,
   onEditHabit,
   onDeleteHabit,
   onAddHabit,
@@ -52,7 +55,16 @@ export function HabitCard({
   const handleAdd = async () => {
     if (newHabitText.trim()) {
       await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-      onAddHabit(newHabitText.trim());
+      onAddHabit(newHabitText.trim().slice(0, 100)); // SECURITY 1: limit length
+    }
+  };
+
+  // UX 6: Complete all habits for today
+  const handleCompleteAll = async () => {
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    const incompleteIds = habits.filter((h) => !todayHabits[h.id]).map((h) => h.id);
+    if (incompleteIds.length > 0) {
+      onCompleteAllHabits(incompleteIds);
     }
   };
 
@@ -63,7 +75,7 @@ export function HabitCard({
 
   const handleSaveEdit = async () => {
     if (editingId && editText.trim()) {
-      onEditHabit(editingId, editText.trim());
+      onEditHabit(editingId, editText.trim().slice(0, 100)); // SECURITY 1: limit
       setEditingId(null);
       setEditText("");
       await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -75,13 +87,6 @@ export function HabitCard({
     const dayHabits = history[date] || {};
     const completedCount = Object.values(dayHabits).filter(Boolean).length;
     return Math.round((completedCount / habits.length) * 100);
-  };
-
-  const getDateLabel = (dateString: string): string => {
-    // Add time component to avoid timezone shifts
-    const [year, month, day] = dateString.split("-").map(Number);
-    const date = new Date(year, month - 1, day);
-    return date.getDate().toString();
   };
 
   const getFullDateLabel = (dateString: string): string => {
@@ -119,7 +124,12 @@ export function HabitCard({
     return days;
   };
 
-  const monthDays = getMonthDays(currentMonth);
+  // PERF 2: Memoize monthDays computation
+  const monthDays = React.useMemo(() => getMonthDays(currentMonth), [currentMonth]);
+
+  // Check if all habits are completed today
+  const allCompletedToday = habits.length > 0 && habits.every((h) => todayHabits[h.id]);
+  const someCompletedToday = habits.some((h) => todayHabits[h.id]);
 
   return (
     <View style={styles.container}>
@@ -139,9 +149,10 @@ export function HabitCard({
           placeholder="Add a new habit..."
           placeholderTextColor={AppColors.textSecondary}
           value={newHabitText}
-          onChangeText={onNewHabitTextChange}
+          onChangeText={(text) => onNewHabitTextChange(text.slice(0, 100))}
           onSubmitEditing={handleAdd}
           returnKeyType="done"
+          maxLength={100}
         />
         <Pressable
           style={({ pressed }) => [styles.addButton, pressed && styles.pressed]}
@@ -163,6 +174,17 @@ export function HabitCard({
           </View>
         ) : null}
       </Pressable>
+
+      {/* UX 6: Complete All button */}
+      {habits.length > 0 && !allCompletedToday && (
+        <Pressable
+          style={({ pressed }) => [styles.completeAllButton, pressed && styles.pressed]}
+          onPress={handleCompleteAll}
+        >
+          <Ionicons name="checkmark-done" size={18} color={AppColors.primary} />
+          <ThemedText style={styles.completeAllText}>Complete All</ThemedText>
+        </Pressable>
+      )}
 
       <View style={styles.habitsList}>
         {habits.map((habit) => {
@@ -192,10 +214,11 @@ export function HabitCard({
                 <TextInput
                   style={styles.editInput}
                   value={editText}
-                  onChangeText={setEditText}
+                  onChangeText={(text) => setEditText(text.slice(0, 100))}
                   onBlur={handleSaveEdit}
                   onSubmitEditing={handleSaveEdit}
                   autoFocus
+                  maxLength={100}
                 />
               ) : (
                 <ThemedText
@@ -222,6 +245,7 @@ export function HabitCard({
                   style={({ pressed }) => [styles.actionBtn, pressed && styles.pressed]}
                   onPress={(e) => {
                     e.stopPropagation();
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); // UX 2: consistent delete haptics
                     onDeleteHabit(habit.id);
                   }}
                   hitSlop={8}
@@ -243,6 +267,22 @@ export function HabitCard({
         <ThemedText style={styles.streakTitle}>
           Habit History
         </ThemedText>
+        {/* BUG 3: Month navigation row */}
+        <View style={styles.monthNav}>
+          <Pressable style={styles.navBtn} onPress={() => setCurrentMonth(prev => {
+            const d = new Date(prev); d.setMonth(d.getMonth() - 1); return d;
+          })}>
+            <Ionicons name="chevron-back" size={16} color={AppColors.textSecondary} />
+          </Pressable>
+          <ThemedText style={styles.monthLabelText}>
+            {currentMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+          </ThemedText>
+          <Pressable style={styles.navBtn} onPress={() => setCurrentMonth(prev => {
+            const d = new Date(prev); d.setMonth(d.getMonth() + 1); return d;
+          })}>
+            <Ionicons name="chevron-forward" size={16} color={AppColors.textSecondary} />
+          </Pressable>
+        </View>
         <View style={styles.streakGrid}>
           {monthDays.map((dayObj, index) => {
             if (!dayObj) return <View key={`empty-${index}`} style={styles.streakDayPlaceholder} />;
@@ -307,7 +347,7 @@ export function HabitCard({
       </View>
     </View>
   );
-}
+});
 
 const styles = StyleSheet.create({
   container: {
@@ -342,13 +382,15 @@ const styles = StyleSheet.create({
   monthNav: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
     gap: Spacing.sm,
+    marginBottom: Spacing.md,
   },
   monthLabelText: {
     fontSize: 12,
     fontWeight: '700',
     color: AppColors.textPrimary,
-    minWidth: 80,
+    minWidth: 120,
     textAlign: 'center',
   },
   navBtn: {
@@ -379,6 +421,24 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.md,
     justifyContent: "center",
     alignItems: "center",
+  },
+  // UX 6: Complete All button
+  completeAllButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: Spacing.sm,
+    backgroundColor: "rgba(16,185,129,0.15)",
+    padding: Spacing.sm,
+    borderRadius: BorderRadius.xs,
+    marginBottom: Spacing.md,
+    borderWidth: 1,
+    borderColor: "rgba(16,185,129,0.3)",
+  },
+  completeAllText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: AppColors.primary,
   },
   habitsList: {
     gap: Spacing.sm,

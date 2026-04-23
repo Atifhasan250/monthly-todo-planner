@@ -32,6 +32,7 @@ import {
   getLocalDateString,
   getLast30Days,
   calculateProgress,
+  completeAllHabitsForToday,
   type Habit,
   type HabitHistory,
   type Week,
@@ -56,11 +57,36 @@ export default function TodayScreen() {
   const [loading, setLoading] = useState(true);
   const [showReminderModal, setShowReminderModal] = useState(false);
   const [tagDismissed, setTagDismissed] = useState(false);
+  // SECURITY 5: Add visible error state
+  const [storageError, setStorageError] = useState<string | null>(null);
 
   const today = getLocalDateString();
   const last30Days = getLast30Days();
   const progress = calculateProgress(weeks);
-  const activeReminders = reminders.filter((r) => r.isActive);
+  const upcomingRemindersCount = React.useMemo(() => {
+    const now = new Date();
+    const currentHours = now.getHours();
+    const currentMinutes = now.getMinutes();
+
+    return reminders.filter(r => {
+      if (!r.isActive) return false;
+      
+      const [hours, minutes] = r.time.split(':').map(Number);
+      const [year, month, day] = r.date.split("-").map(Number);
+      
+      const reminderDateTime = new Date(year, month - 1, day, hours, minutes);
+      const isSpecificFutureDate = reminderDateTime > now;
+      const isDefault = r.id.startsWith("default_");
+
+      if (!isDefault && isSpecificFutureDate) {
+         // Specific future date reminder
+         return true;
+      }
+
+      // Daily reminder: falls under "upcoming" if it hasn't fired yet today
+      return hours > currentHours || (hours === currentHours && minutes > currentMinutes);
+    }).length;
+  }, [reminders]);
 
   const loadData = useCallback(async () => {
     try {
@@ -76,37 +102,42 @@ export default function TodayScreen() {
       setWeeks(weeksData);
       setReminders(remindersData);
       setTagDismissed(dismissed === "true");
+      setStorageError(null); // Clear any previous error
     } catch (error) {
+      // SECURITY 5: Show visible error state
+      setStorageError("Could not load your data. Please restart the app.");
       console.error("Failed to load data:", error);
     } finally {
       setLoading(false);
     }
   }, []);
 
+  // BUG 10: Fix race condition — run setupNotifications then loadData sequentially
   useEffect(() => {
-    const setupNotifications = async () => {
-      const granted = await requestNotificationPermission();
-      if (granted) {
-        const { getReminderSettings, getDefaultReminders, getReminders, saveReminders } = await import("@/lib/storage");
-        const settings = await getReminderSettings();
-        const existingReminders = await getReminders();
-        
-        if (settings.useDefault && existingReminders.length === 0) {
-          const defaults = await getDefaultReminders();
-          const scheduled = [];
-          for (const r of defaults) {
-            const id = await scheduleReminderNotification(r);
-            scheduled.push({ ...r, notificationId: id || undefined });
+    const init = async () => {
+      const setupNotifications = async () => {
+        const granted = await requestNotificationPermission();
+        if (granted) {
+          const { getReminderSettings, getDefaultReminders, getReminders, saveReminders } = await import("@/lib/storage");
+          const settings = await getReminderSettings();
+          const existingReminders = await getReminders();
+          
+          if (settings.useDefault && existingReminders.length === 0) {
+            const defaults = await getDefaultReminders();
+            const scheduled = [];
+            for (const r of defaults) {
+              const id = await scheduleReminderNotification(r);
+              scheduled.push({ ...r, notificationId: id || undefined });
+            }
+            await saveReminders(scheduled);
           }
-          await saveReminders(scheduled);
-          setReminders(scheduled);
-        } else {
-          setReminders(existingReminders);
         }
-      }
+      };
+      
+      await setupNotifications(); // This sets up and saves reminders
+      await loadData();           // This reads the final saved state
     };
-    setupNotifications();
-    loadData();
+    init();
   }, [loadData]);
 
   const onRefresh = useCallback(async () => {
@@ -120,69 +151,76 @@ export default function TodayScreen() {
     setTagDismissed(true);
   };
 
-  const handleToggleHabit = async (habitId: string) => {
-    const updated = await toggleHabitForToday(habitId, today);
+  // PERF 1: Memoize callbacks to prevent HabitCard re-renders
+  const handleToggleHabit = useCallback(async (habitId: string) => {
+    const updated = await toggleHabitForToday(habitId, getLocalDateString());
     setHabitHistory({ ...updated });
-  };
+  }, []);
 
-  const handleAddHabit = async (label: string) => {
+  const handleCompleteAllHabits = useCallback(async (habitIds: string[]) => {
+    const updated = await completeAllHabitsForToday(habitIds, getLocalDateString());
+    setHabitHistory({ ...updated });
+  }, []);
+
+  const handleAddHabit = useCallback(async (label: string) => {
     const updated = await addHabit(label);
     setHabits(updated);
     setNewHabitText("");
-  };
+  }, []);
 
-  const handleEditHabit = async (habitId: string, label: string) => {
+  const handleEditHabit = useCallback(async (habitId: string, label: string) => {
     const updated = await updateHabit(habitId, label);
     setHabits(updated);
-  };
+  }, []);
 
-  const handleDeleteHabit = async (habitId: string) => {
+  // BUG 7: Optimistic update on habit delete
+  const handleDeleteHabit = useCallback(async (habitId: string) => {
+    setHabits(prev => prev.filter(h => h.id !== habitId)); // Optimistic update
     await deleteHabit(habitId);
-    // Reload all data to ensure history and habits are in sync
-    await loadData();
-  };
+    await loadData(); // Full reload to sync history
+  }, [loadData]);
 
-  const handleToggleTask = async (weekIndex: number, taskId: string) => {
+  const handleToggleTask = useCallback(async (weekIndex: number, taskId: string) => {
     const updated = await toggleTaskComplete(weekIndex, taskId);
     setWeeks(updated);
-  };
+  }, []);
 
-  const handleAddTask = async (
+  const handleAddTask = useCallback(async (
     weekIndex: number,
     task: { days: string; desc: string; resource?: string }
   ) => {
     const updated = await addTask(weekIndex, task);
     setWeeks(updated);
-  };
+  }, []);
 
-  const handleEditTask = async (
+  const handleEditTask = useCallback(async (
     weekIndex: number,
     taskId: string,
     updates: Partial<Task>
   ) => {
     const updated = await updateTask(weekIndex, taskId, updates);
     setWeeks(updated);
-  };
+  }, []);
 
-  const handleDeleteTask = async (weekIndex: number, taskId: string) => {
+  const handleDeleteTask = useCallback(async (weekIndex: number, taskId: string) => {
     const updated = await deleteTask(weekIndex, taskId);
     setWeeks(updated);
-  };
+  }, []);
 
-  const handleAddReminder = async (reminder: Omit<Reminder, "id">) => {
+  const handleAddReminder = useCallback(async (reminder: Omit<Reminder, "id">) => {
     const updated = await addReminder(reminder);
     setReminders(updated);
-  };
+  }, []);
 
-  const handleUpdateReminder = async (id: string, updates: Partial<Reminder>) => {
+  const handleUpdateReminder = useCallback(async (id: string, updates: Partial<Reminder>) => {
     const updated = await updateReminder(id, updates);
     setReminders(updated);
-  };
+  }, []);
 
-  const handleDeleteReminder = async (id: string) => {
+  const handleDeleteReminder = useCallback(async (id: string) => {
     const updated = await deleteReminder(id);
     setReminders(updated);
-  };
+  }, []);
 
   if (loading) {
     return (
@@ -213,6 +251,17 @@ export default function TodayScreen() {
         />
       }
     >
+      {/* SECURITY 5: Error banner */}
+      {storageError && (
+        <View style={styles.errorBanner}>
+          <Ionicons name="warning" size={16} color="#fff" />
+          <ThemedText style={styles.errorBannerText}>{storageError}</ThemedText>
+          <Pressable onPress={() => { setStorageError(null); loadData(); }} style={styles.retryBtn}>
+            <ThemedText style={styles.retryBtnText}>Retry</ThemedText>
+          </Pressable>
+        </View>
+      )}
+
       {!tagDismissed && (
         <View style={styles.infoTag}>
           <View style={styles.infoTagContent}>
@@ -237,13 +286,14 @@ export default function TodayScreen() {
         today={today}
         last30Days={last30Days}
         onToggleHabit={handleToggleHabit}
+        onCompleteAllHabits={handleCompleteAllHabits}
         onEditHabit={handleEditHabit}
         onDeleteHabit={handleDeleteHabit}
         onAddHabit={handleAddHabit}
         newHabitText={newHabitText}
         onNewHabitTextChange={setNewHabitText}
         onOpenReminders={() => setShowReminderModal(true)}
-        reminderCount={activeReminders.length}
+        reminderCount={upcomingRemindersCount}
       />
 
       <ReminderModal
@@ -298,6 +348,33 @@ const styles = StyleSheet.create({
   },
   loadingText: {
     color: AppColors.textSecondary,
+  },
+  // SECURITY 5: Error banner styles
+  errorBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: AppColors.danger,
+    paddingVertical: Spacing.sm,
+    paddingHorizontal: Spacing.md,
+    borderRadius: BorderRadius.sm,
+    marginBottom: Spacing.md,
+    gap: Spacing.sm,
+  },
+  errorBannerText: {
+    color: "#fff",
+    fontSize: 13,
+    flex: 1,
+  },
+  retryBtn: {
+    backgroundColor: "rgba(255,255,255,0.2)",
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: 4,
+    borderRadius: BorderRadius.xs,
+  },
+  retryBtnText: {
+    color: "#fff",
+    fontSize: 12,
+    fontWeight: "600",
   },
   emptyState: {
     alignItems: "center",

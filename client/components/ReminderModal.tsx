@@ -8,6 +8,7 @@ import {
   ScrollView,
   Platform,
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import DateTimePicker from "@react-native-community/datetimepicker";
@@ -29,11 +30,18 @@ interface ReminderModalProps {
   onDeleteReminder: (id: string) => Promise<void>;
 }
 
+// BUG 4: Fixed interval type to ReturnType<typeof setInterval>
 function CountdownTimer({ targetDate }: { targetDate: Date }) {
   const [timeLeft, setTimeLeft] = useState("");
-  const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
+    // BUG 4: Clear any existing interval before setting a new one
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+
     const updateTimer = () => {
       const now = new Date();
       const diff = targetDate.getTime() - now.getTime();
@@ -52,7 +60,7 @@ function CountdownTimer({ targetDate }: { targetDate: Date }) {
       if (hours > 0) timeString += `${hours}h `;
       if (minutes > 0 || hours > 0) timeString += `${minutes}m `;
       timeString += `${seconds}s`;
-      
+
       setTimeLeft(timeString);
     };
 
@@ -60,7 +68,10 @@ function CountdownTimer({ targetDate }: { targetDate: Date }) {
     timerRef.current = setInterval(updateTimer, 1000);
 
     return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
     };
   }, [targetDate]);
 
@@ -80,11 +91,13 @@ export function ReminderModal({
   onUpdateReminder,
   onDeleteReminder,
 }: ReminderModalProps) {
+  const insets = useSafeAreaInsets();
   const [message, setMessage] = useState("");
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [showTimePicker, setShowTimePicker] = useState(false);
   const [editingReminder, setEditingReminder] = useState<Reminder | null>(null);
+  const [reminderSettings, setReminderSettings] = useState<{ useDefault: boolean }>({ useDefault: false });
 
   useEffect(() => {
     if (!visible) {
@@ -129,7 +142,7 @@ export function ReminderModal({
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
     const reminderData = {
-      message: message.trim(),
+      message: message.trim().slice(0, 200), // SECURITY 1: limit length
       date: getDateString(selectedDate),
       time: getTimeString(selectedDate),
       isActive: true,
@@ -143,7 +156,7 @@ export function ReminderModal({
         ...editingReminder,
         ...reminderData,
       });
-      
+
       await onUpdateReminder(editingReminder.id, {
         ...reminderData,
         notificationId: notificationId || undefined,
@@ -175,7 +188,7 @@ export function ReminderModal({
   };
 
   const handleDelete = async (reminder: Reminder) => {
-    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); // UX 2: consistent haptics for delete
     if (reminder.notificationId) {
       await cancelReminderNotification(reminder.notificationId);
     }
@@ -184,7 +197,7 @@ export function ReminderModal({
 
   const handleToggleActive = async (reminder: Reminder) => {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    
+
     if (reminder.isActive && reminder.notificationId) {
       await cancelReminderNotification(reminder.notificationId);
       await onUpdateReminder(reminder.id, { isActive: false, notificationId: undefined });
@@ -229,22 +242,19 @@ export function ReminderModal({
       onRequestClose={onClose}
     >
       <View style={styles.container}>
-        <View style={styles.header}>
+        <View style={[styles.header, { paddingTop: Math.max(insets.top, Spacing.lg) }]}>
           <ThemedText style={styles.headerTitle}>Reminders</ThemedText>
           <Pressable onPress={onClose} style={styles.closeButton}>
             <Ionicons name="close" size={24} color={AppColors.textPrimary} />
           </Pressable>
         </View>
 
+        <View style={styles.infoBox}>
+          <Ionicons name="information-circle-outline" size={16} color={AppColors.textSecondary} />
+          <ThemedText style={styles.infoText}>Reminder feature is still under development and may not work properly.</ThemedText>
+        </View>
         <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
-          {Platform.OS === 'android' && (
-            <View style={styles.infoBox}>
-              <Ionicons name="information-circle-outline" size={16} color={AppColors.primary} />
-              <ThemedText style={styles.infoText}>
-                Note: Scheduled notifications work best in a standalone app. In Expo Go, they might occasionally be delayed.
-              </ThemedText>
-            </View>
-          )}
+
           <View style={styles.formSection}>
             <ThemedText style={styles.sectionTitle}>
               {editingReminder ? "Edit Reminder" : "New Reminder"}
@@ -255,8 +265,9 @@ export function ReminderModal({
               placeholder="Reminder message..."
               placeholderTextColor={AppColors.textSecondary}
               value={message}
-              onChangeText={setMessage}
+              onChangeText={(text) => setMessage(text.slice(0, 200))}
               multiline
+              maxLength={200}
             />
 
             <View style={styles.dateTimeRow}>
@@ -409,7 +420,6 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     alignItems: "center",
     paddingHorizontal: Spacing.lg,
-    paddingTop: Spacing["2xl"],
     paddingBottom: Spacing.lg,
     borderBottomWidth: 1,
     borderBottomColor: AppColors.border,

@@ -2,7 +2,7 @@
   "expo": {
     "name": "Monthly Todo Planner",
     "slug": "monthly-todo-planner",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "monthlytodo",
@@ -18,14 +18,28 @@
         "foregroundImage": "./assets/images/icon.png"
       },
       "package": "com.atif.monthlytodo",
+      "versionCode": 2,
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "jsEngine": "hermes"
     },
     "web": {
       "output": "single",
       "favicon": "./assets/images/icon.png"
     },
     "plugins": [
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "enableProguardInReleaseBuilds": true,
+            "enableShrinkResourcesInReleaseBuilds": true,
+            "minifyEnabled": true
+          }
+        }
+      ],
+      "./plugins/withABISplit",
+      "./plugins/withExactAlarm",
       [
         "expo-splash-screen",
         {
@@ -38,10 +52,25 @@
           }
         }
       ],
-      "expo-web-browser"
+      "expo-web-browser",
+      "@react-native-community/datetimepicker",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/images/icon.png",
+          "color": "#8B5CF6",
+          "defaultChannel": "reminders",
+          "sounds": []
+        }
+      ]
     ],
     "experiments": {
       "reactCompiler": true
+    },
+    "extra": {
+      "eas": {
+        "projectId": "9fc45011-50c6-4f4d-be75-7a76594f0273"
+      }
     }
   }
 }

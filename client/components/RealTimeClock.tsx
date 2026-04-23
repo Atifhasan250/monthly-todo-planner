@@ -3,7 +3,7 @@ import { View, StyleSheet } from "react-native";
 import { ThemedText } from "./ThemedText";
 import { AppColors, Spacing, Fonts } from "@/constants/theme";
 
-export function RealTimeClock() {
+export const RealTimeClock = React.memo(function RealTimeClock() {
   const [time, setTime] = useState(new Date());
 
   useEffect(() => {
@@ -11,18 +11,10 @@ export function RealTimeClock() {
       setTime(new Date());
     }, 1000);
 
-    return () => clearInterval(timer);
-  }, []);
-
-  const formatDate = (date: Date) => {
-    const options: Intl.DateTimeFormatOptions = {
-      weekday: "long",
-      year: "numeric",
-      month: "long",
-      day: "numeric",
+    return () => {
+      clearInterval(timer);
     };
-    return date.toLocaleDateString("en-US", options);
-  };
+  }, []);
 
   const formatTime = (date: Date) => {
     return date.toLocaleTimeString("en-US", {
@@ -38,7 +30,7 @@ export function RealTimeClock() {
       <ThemedText style={styles.timeText}>{formatTime(time)}</ThemedText>
     </View>
   );
-}
+});
 
 const styles = StyleSheet.create({
   container: {

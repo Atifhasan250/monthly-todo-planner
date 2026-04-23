@@ -6,7 +6,7 @@ import Animated, {
   withTiming,
   Easing,
 } from "react-native-reanimated";
-import { LinearGradient } from "expo-linear-gradient";
+
 
 import { ThemedText } from "@/components/ThemedText";
 import { AppColors, Spacing, BorderRadius } from "@/constants/theme";
@@ -40,14 +40,7 @@ export function ProgressBar({ percent, completed, total }: ProgressBarProps) {
         </ThemedText>
       </View>
       <View style={styles.track}>
-        <Animated.View style={[styles.progressWrapper, animatedStyle]}>
-          <LinearGradient
-            colors={[AppColors.primary, "#34d399"]}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 0 }}
-            style={styles.progress}
-          />
-        </Animated.View>
+        <Animated.View style={[styles.progressWrapper, styles.progress, animatedStyle]} />
       </View>
     </View>
   );
@@ -60,13 +53,14 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: "row",
     justifyContent: "space-between",
-    alignItems: "baseline",
-    marginBottom: Spacing.sm,
+    alignItems: "flex-end",
+    marginBottom: Spacing.md,
   },
   percentText: {
     fontSize: 32,
     fontWeight: "700",
     color: AppColors.primary,
+    paddingBottom: 6,
   },
   statsText: {
     fontSize: 14,
@@ -87,6 +81,7 @@ const styles = StyleSheet.create({
   progress: {
     flex: 1,
     borderRadius: BorderRadius.full,
+    backgroundColor: AppColors.primary,
   },
   subtitle: {
     fontSize: 12,

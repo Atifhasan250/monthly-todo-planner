@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useMemo } from "react";
 import { View, ScrollView, StyleSheet, Pressable, RefreshControl } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useHeaderHeight } from "@react-navigation/elements";
@@ -14,10 +14,19 @@ import {
   getHabitHistory,
   getWeeks,
   calculateProgress,
+  getLocalDateString,
   type Habit,
   type HabitHistory,
   type Week,
 } from "@/lib/storage";
+import {
+  getBestStreak,
+  getWeekOverWeekComparison,
+  getPowerDays,
+  getConsistencyScore,
+  getTotalActiveDays,
+  get7DayAverage,
+} from "@/lib/analytics";
 
 type FilterType = "all" | "tasks" | "habits";
 
@@ -32,7 +41,7 @@ export default function HistoryScreen() {
   const [filter, setFilter] = useState<FilterType>("all");
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  const [selectedDate, setSelectedDate] = useState<string | null>(getLocalDateString());
   const [currentMonthDate, setCurrentMonthDate] = useState(new Date());
 
   const loadData = useCallback(async () => {
@@ -75,6 +84,14 @@ export default function HistoryScreen() {
     year: "numeric",
   });
 
+  const getDateString = (date: Date): string => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const day = String(date.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  };
+
+  // BUG 2: Fixed getDaysInMonth padding calculation
   const getDaysInMonth = () => {
     const year = currentMonthDate.getFullYear();
     const month = currentMonthDate.getMonth();
@@ -82,12 +99,15 @@ export default function HistoryScreen() {
     const lastDay = new Date(year, month + 1, 0);
     const days: { date: string; day: number; isCurrentMonth: boolean }[] = [];
 
+    // BUG 2: Fixed start padding — use lastDayOfPrevMonth approach
     const startPadding = firstDay.getDay();
+    const lastDayOfPrevMonth = new Date(year, month, 0).getDate();
     for (let i = startPadding - 1; i >= 0; i--) {
-      const prevDate = new Date(year, month, -i);
+      const day = lastDayOfPrevMonth - i;
+      const prevDate = new Date(year, month - 1, day);
       days.push({
         date: getDateString(prevDate),
-        day: prevDate.getDate(),
+        day: day,
         isCurrentMonth: false,
       });
     }
@@ -112,13 +132,6 @@ export default function HistoryScreen() {
     }
 
     return days;
-  };
-
-  const getDateString = (date: Date): string => {
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, "0");
-    const day = String(date.getDate()).padStart(2, "0");
-    return `${year}-${month}-${day}`;
   };
 
   const getDayIndicators = (date: string) => {
@@ -151,11 +164,12 @@ export default function HistoryScreen() {
     };
   };
 
-  const days = getDaysInMonth();
+  // PERF 3: Memoize all derived data
+  const days = useMemo(() => getDaysInMonth(), [currentMonthDate]);
   const weekDays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
   const selectedDetails = getSelectedDayDetails();
   const hasAnyData = Object.keys(habitHistory).length > 0 || weeks.some((w) => w.tasks.some((t) => t.completed));
-  const overallProgress = calculateProgress(weeks);
+  const overallProgress = useMemo(() => calculateProgress(weeks), [weeks]);
 
   const getWeekProgress = (weekIndex: number) => {
     const week = weeks[weekIndex];
@@ -166,7 +180,8 @@ export default function HistoryScreen() {
     return { completed, total, percent };
   };
 
-  const getHabitProgress = () => {
+  // PERF 3: Memoize analytics
+  const habitProgress = useMemo(() => {
     const totalDays = Object.keys(habitHistory).length;
     if (totalDays === 0 || habits.length === 0) return 0;
     
@@ -176,9 +191,9 @@ export default function HistoryScreen() {
     });
     
     return Math.round((totalCompleted / (totalDays * habits.length)) * 100);
-  };
+  }, [habitHistory, habits]);
 
-  const getLast7Days = () => {
+  const last7Days = useMemo(() => {
     const days: string[] = [];
     const today = new Date();
     for (let i = 6; i >= 0; i--) {
@@ -187,7 +202,7 @@ export default function HistoryScreen() {
       days.push(getDateString(date));
     }
     return days;
-  };
+  }, []);
 
   const getDailyHabitProgress = (date: string) => {
     if (habits.length === 0) return 0;
@@ -196,7 +211,8 @@ export default function HistoryScreen() {
     return Math.round((completedCount / habits.length) * 100);
   };
 
-  const getHabitStreak = () => {
+  // PERF 3: Memoize streak
+  const habitStreak = useMemo(() => {
     let streak = 0;
     const today = new Date();
     for (let i = 0; i < 365; i++) {
@@ -212,15 +228,33 @@ export default function HistoryScreen() {
       }
     }
     return streak;
-  };
+  }, [habitHistory, habits]);
 
-  const getTotalHabitsCompleted = () => {
+  // ANALYTICS: Best streak
+  const bestStreak = useMemo(() => getBestStreak(habits, habitHistory), [habits, habitHistory]);
+
+  // ANALYTICS: Week over week comparison
+  const weekOverWeek = useMemo(() => getWeekOverWeekComparison(weeks), [weeks]);
+
+  // ANALYTICS: Power days
+  const powerDays = useMemo(() => getPowerDays(habits, habitHistory, weeks), [habits, habitHistory, weeks]);
+
+  // ANALYTICS: Consistency score
+  const consistencyScore = useMemo(() => getConsistencyScore(habitHistory, weeks), [habitHistory, weeks]);
+
+  // ANALYTICS: Total active days
+  const totalActiveDays = useMemo(() => getTotalActiveDays(habitHistory, weeks), [habitHistory, weeks]);
+
+  // ANALYTICS: 7-day average
+  const sevenDayAvg = useMemo(() => get7DayAverage(habits, habitHistory), [habits, habitHistory]);
+
+  const totalHabitsCompleted = useMemo(() => {
     let total = 0;
     Object.values(habitHistory).forEach((dayHabits) => {
       total += Object.values(dayHabits).filter(Boolean).length;
     });
     return total;
-  };
+  }, [habitHistory]);
 
   if (loading) {
     return (
@@ -229,18 +263,6 @@ export default function HistoryScreen() {
       </View>
     );
   }
-
-  const getDayName = (date: string) => {
-    return new Date(date + "T00:00:00").toLocaleDateString("en-US", { weekday: "short" });
-  };
-
-  const getFormattedDate = (date: string) => {
-    const d = new Date(date + "T00:00:00");
-    const dayName = d.toLocaleDateString("en-US", { weekday: "short" }).toLowerCase();
-    const day = d.getDate();
-    const month = d.toLocaleDateString("en-US", { month: "short" }).toLowerCase();
-    return `${dayName}, ${day} ${month}`;
-  };
 
   return (
     <ScrollView
@@ -261,17 +283,6 @@ export default function HistoryScreen() {
         />
       }
     >
-      <View style={styles.headerRow}>
-        <View style={styles.monthNav}>
-          <Pressable onPress={() => changeMonth(-1)} style={styles.navBtn}>
-            <Ionicons name="chevron-back" size={24} color={AppColors.primary} />
-          </Pressable>
-          <ThemedText style={styles.monthTitle}>{currentMonthLabel}</ThemedText>
-          <Pressable onPress={() => changeMonth(1)} style={styles.navBtn}>
-            <Ionicons name="chevron-forward" size={24} color={AppColors.primary} />
-          </Pressable>
-        </View>
-      </View>
 
       <View style={styles.filterRow}>
         {(["all", "tasks", "habits"] as FilterType[]).map((f) => (
@@ -305,15 +316,66 @@ export default function HistoryScreen() {
 
       {hasAnyData ? (
         <>
+          {/* ANALYTICS: Enhanced stats cards */}
+          <View style={styles.statsRow}>
+            <View style={styles.statCard}>
+              <ThemedText style={styles.statValue}>{habitStreak}</ThemedText>
+              <ThemedText style={styles.statLabel}>Current Streak</ThemedText>
+            </View>
+            <View style={styles.statCard}>
+              <ThemedText style={[styles.statValue, { color: AppColors.secondary }]}>{bestStreak}</ThemedText>
+              <ThemedText style={styles.statLabel}>Best Streak</ThemedText>
+            </View>
+            <View style={styles.statCard}>
+              <ThemedText style={[styles.statValue, { color: "#f59e0b" }]}>{powerDays.length}</ThemedText>
+              <ThemedText style={styles.statLabel}>Power Days</ThemedText>
+            </View>
+          </View>
+
+          <View style={styles.statsRow}>
+            <View style={styles.statCard}>
+              <ThemedText style={styles.statValue}>{sevenDayAvg}%</ThemedText>
+              <ThemedText style={styles.statLabel}>7-Day Avg</ThemedText>
+            </View>
+            <View style={styles.statCard}>
+              <ThemedText style={[styles.statValue, { color: AppColors.secondary }]}>{consistencyScore}</ThemedText>
+              <ThemedText style={styles.statLabel}>Consistency</ThemedText>
+            </View>
+            <View style={styles.statCard}>
+              <ThemedText style={[styles.statValue, { color: "#f59e0b" }]}>{totalActiveDays}</ThemedText>
+              <ThemedText style={styles.statLabel}>Active Days</ThemedText>
+            </View>
+          </View>
+
+          {/* ANALYTICS: Week-over-week trend */}
+          <View style={styles.trendCard}>
+            <View style={styles.trendRow}>
+              <ThemedText style={styles.trendLabel}>Tasks this week vs last</ThemedText>
+              <View style={styles.trendBadge}>
+                <Ionicons
+                  name={weekOverWeek.direction === "up" ? "arrow-up" : weekOverWeek.direction === "down" ? "arrow-down" : "remove"}
+                  size={14}
+                  color={weekOverWeek.direction === "up" ? AppColors.primary : weekOverWeek.direction === "down" ? AppColors.danger : AppColors.textSecondary}
+                />
+                <ThemedText style={[
+                  styles.trendValue,
+                  { color: weekOverWeek.direction === "up" ? AppColors.primary : weekOverWeek.direction === "down" ? AppColors.danger : AppColors.textSecondary }
+                ]}>
+                  {weekOverWeek.thisWeek} vs {weekOverWeek.lastWeek}
+                  {weekOverWeek.changePercent > 0 ? ` (${weekOverWeek.direction === "up" ? "+" : "-"}${weekOverWeek.changePercent}%)` : ""}
+                </ThemedText>
+              </View>
+            </View>
+          </View>
+
           {filter === "habits" ? (
             <View style={[styles.graphCard, { borderColor: AppColors.secondary }]}>
               <ThemedText style={[styles.graphTitle, { color: AppColors.secondary }]}>
                 Daily Habit Progress (Last 7 Days)
               </ThemedText>
               <View style={styles.graphContainer}>
-                {getLast7Days().map((date) => {
+                {last7Days.map((date) => {
                   const progress = getDailyHabitProgress(date);
-                  const dayName = new Date(date + "T00:00:00").toLocaleDateString("en-US", { weekday: "short" });
                   return (
                     <View key={date} style={styles.graphBarWrapper}>
                       <View style={styles.graphBar}>
@@ -333,19 +395,19 @@ export default function HistoryScreen() {
               <View style={styles.summaryRow}>
                 <View style={styles.summaryItem}>
                   <ThemedText style={[styles.summaryValue, { color: AppColors.secondary }]}>
-                    {getHabitStreak()}
+                    {habitStreak}
                   </ThemedText>
                   <ThemedText style={styles.summaryLabel}>Day Streak</ThemedText>
                 </View>
                 <View style={styles.summaryItem}>
                   <ThemedText style={[styles.summaryValue, { color: AppColors.secondary }]}>
-                    {getHabitProgress()}%
+                    {habitProgress}%
                   </ThemedText>
                   <ThemedText style={styles.summaryLabel}>Average</ThemedText>
                 </View>
                 <View style={styles.summaryItem}>
                   <ThemedText style={[styles.summaryValue, { color: AppColors.secondary }]}>
-                    {getTotalHabitsCompleted()}
+                    {totalHabitsCompleted}
                   </ThemedText>
                   <ThemedText style={styles.summaryLabel}>Total Done</ThemedText>
                 </View>
@@ -353,28 +415,23 @@ export default function HistoryScreen() {
 
               {habits.length > 0 ? (
                 <View style={styles.habitListSection}>
-                  <ThemedText style={styles.habitListTitle}>Your Habits</ThemedText>
+                  <ThemedText style={styles.habitListTitle}>
+                    Habits for {selectedDate ? new Date(selectedDate + "T00:00:00").toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : 'Today'}
+                  </ThemedText>
                   {habits.map((habit) => {
-                    const completedDays = Object.keys(habitHistory).filter(
-                      (date) => habitHistory[date]?.[habit.id]
-                    ).length;
-                    const totalDays = Object.keys(habitHistory).length || 1;
-                    const habitPercent = Math.round((completedDays / totalDays) * 100);
+                    const targetDate = selectedDate || getDateString(new Date());
+                    const isCompleted = habitHistory[targetDate]?.[habit.id];
                     return (
                       <View key={habit.id} style={styles.habitListItem}>
                         <View style={styles.habitListInfo}>
                           <Ionicons name="flash" size={16} color={AppColors.secondary} />
                           <ThemedText style={styles.habitListLabel}>{habit.label}</ThemedText>
                         </View>
-                        <View style={styles.habitProgressBar}>
-                          <View
-                            style={[
-                              styles.habitProgressFill,
-                              { width: `${habitPercent}%` },
-                            ]}
-                          />
-                        </View>
-                        <ThemedText style={styles.habitListPercent}>{habitPercent}%</ThemedText>
+                        {isCompleted ? (
+                          <Ionicons name="checkmark-circle" size={24} color={AppColors.secondary} />
+                        ) : (
+                          <Ionicons name="close-circle" size={24} color={AppColors.border} />
+                        )}
                       </View>
                     );
                   })}
@@ -446,7 +503,7 @@ export default function HistoryScreen() {
                   <ThemedText style={styles.summaryLabel}>Overall</ThemedText>
                 </View>
                 <View style={styles.summaryItem}>
-                  <ThemedText style={styles.summaryValue}>{getHabitProgress()}%</ThemedText>
+                  <ThemedText style={styles.summaryValue}>{habitProgress}%</ThemedText>
                   <ThemedText style={styles.summaryLabel}>Habits Avg</ThemedText>
                 </View>
               </View>
@@ -454,6 +511,18 @@ export default function HistoryScreen() {
           )}
 
           <View style={styles.calendarCard}>
+            <View style={styles.headerRow}>
+              <View style={styles.monthNav}>
+                <Pressable onPress={() => changeMonth(-1)} style={styles.navBtn}>
+                  <Ionicons name="chevron-back" size={24} color={AppColors.primary} />
+                </Pressable>
+                <ThemedText style={styles.monthTitle}>{currentMonthLabel}</ThemedText>
+                <Pressable onPress={() => changeMonth(1)} style={styles.navBtn}>
+                  <Ionicons name="chevron-forward" size={24} color={AppColors.primary} />
+                </Pressable>
+              </View>
+            </View>
+
             <View style={styles.weekHeader}>
               {weekDays.map((day) => (
                 <View key={day} style={styles.weekDayCell}>
@@ -471,11 +540,20 @@ export default function HistoryScreen() {
                   day.date === getDateString(new Date()) && day.isCurrentMonth;
                 const isSelected = selectedDate === day.date;
 
+                // ANALYTICS: Heatmap color based on completion %
+                const dayProgress = getDailyHabitProgress(day.date);
+                let heatmapStyle = {};
+                if (day.isCurrentMonth && dayProgress > 0) {
+                  const opacity = dayProgress <= 33 ? 0.2 : dayProgress <= 66 ? 0.4 : dayProgress <= 99 ? 0.7 : 1.0;
+                  heatmapStyle = { backgroundColor: `rgba(16,185,129,${opacity})` };
+                }
+
                 return (
                   <Pressable
                     key={index}
                     style={[
                       styles.calendarDay,
+                      heatmapStyle,
                       !day.isCurrentMonth && styles.calendarDayFaded,
                       isToday && styles.calendarDayToday,
                       isSelected && styles.calendarDaySelected,
@@ -487,6 +565,7 @@ export default function HistoryScreen() {
                         styles.dayNumber,
                         !day.isCurrentMonth && styles.dayNumberFaded,
                         isToday && styles.dayNumberToday,
+                        isSelected && styles.dayNumberSelected,
                       ]}
                     >
                       {day.day}
@@ -671,6 +750,60 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: AppColors.textSecondary,
   },
+  // ANALYTICS: Stats cards
+  statsRow: {
+    flexDirection: "row",
+    gap: Spacing.sm,
+    marginBottom: Spacing.sm,
+  },
+  statCard: {
+    flex: 1,
+    backgroundColor: AppColors.surface,
+    borderRadius: BorderRadius.sm,
+    padding: Spacing.md,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: AppColors.border,
+  },
+  statValue: {
+    fontSize: 22,
+    fontWeight: "700",
+    color: AppColors.primary,
+  },
+  statLabel: {
+    fontSize: 10,
+    color: AppColors.textSecondary,
+    marginTop: 2,
+    textAlign: "center",
+  },
+  // ANALYTICS: Trend card
+  trendCard: {
+    backgroundColor: AppColors.surface,
+    borderRadius: BorderRadius.sm,
+    padding: Spacing.md,
+    marginBottom: Spacing.lg,
+    borderWidth: 1,
+    borderColor: AppColors.border,
+  },
+  trendRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  trendLabel: {
+    fontSize: 13,
+    color: AppColors.textSecondary,
+    flex: 1,
+  },
+  trendBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  trendValue: {
+    fontSize: 13,
+    fontWeight: "600",
+  },
   calendarCard: {
     backgroundColor: AppColors.surface,
     borderRadius: BorderRadius.sm,
@@ -701,17 +834,19 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     padding: 2,
+    borderRadius: BorderRadius.xs,
+    borderWidth: 2,
+    borderColor: "transparent",
   },
   calendarDayFaded: {
     opacity: 0.3,
   },
   calendarDayToday: {
-    backgroundColor: "rgba(16,185,129,0.2)",
-    borderRadius: BorderRadius.xs,
+    borderColor: "rgba(16,185,129,0.5)",
   },
   calendarDaySelected: {
+    borderColor: AppColors.primary,
     backgroundColor: "rgba(139,92,246,0.3)",
-    borderRadius: BorderRadius.xs,
   },
   dayNumber: {
     fontSize: 14,
@@ -722,7 +857,11 @@ const styles = StyleSheet.create({
     color: AppColors.textSecondary,
   },
   dayNumberToday: {
-    color: AppColors.primary,
+    color: "#fff",
+    fontWeight: "700",
+  },
+  dayNumberSelected: {
+    color: "#fff",
     fontWeight: "700",
   },
   indicatorRow: {

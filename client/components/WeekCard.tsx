@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { View, StyleSheet, Pressable, TextInput, Modal, Linking } from "react-native";
+import { View, StyleSheet, Pressable, TextInput, Modal, Linking, Alert } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 
@@ -38,9 +38,9 @@ export function WeekCard({
     if (taskForm.desc.trim()) {
       await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
       onAddTask(weekIndex, {
-        days: taskForm.days || `Day ${week.tasks.length + 1}`,
-        desc: taskForm.desc,
-        resource: taskForm.resource || undefined,
+        days: taskForm.days.slice(0, 50) || `Day ${week.tasks.length + 1}`, // SECURITY 1: limit
+        desc: taskForm.desc.slice(0, 500), // SECURITY 1: limit
+        resource: taskForm.resource ? taskForm.resource.slice(0, 500) : undefined, // SECURITY 1: limit
       });
       setTaskForm({ days: "", desc: "", resource: "" });
       setShowAddModal(false);
@@ -51,9 +51,9 @@ export function WeekCard({
     if (editingTask && taskForm.desc.trim()) {
       await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
       onEditTask(weekIndex, editingTask.id, {
-        days: taskForm.days,
-        desc: taskForm.desc,
-        resource: taskForm.resource || undefined,
+        days: taskForm.days.slice(0, 50), // SECURITY 1: limit
+        desc: taskForm.desc.slice(0, 500), // SECURITY 1: limit
+        resource: taskForm.resource ? taskForm.resource.slice(0, 500) : undefined, // SECURITY 1: limit
       });
       setShowEditModal(false);
       setEditingTask(null);
@@ -66,12 +66,26 @@ export function WeekCard({
     setShowEditModal(true);
   };
 
+  // SECURITY 2: Validate and normalize resource URLs before opening
   const openLink = async (url: string) => {
     try {
-      await Linking.openURL(url);
+      let normalizedUrl = url.trim();
+      // Auto-prepend https:// for bare domains like 'facebook.com'
+      if (!normalizedUrl.startsWith('https://') && !normalizedUrl.startsWith('http://')) {
+        normalizedUrl = `https://${normalizedUrl}`;
+      }
+      const supported = await Linking.canOpenURL(normalizedUrl);
+      if (supported) await Linking.openURL(normalizedUrl);
     } catch {
       // Silent fail
     }
+  };
+
+  // UX 7: Format completed date for display
+  const formatCompletedDate = (dateStr: string): string => {
+    const [year, month, day] = dateStr.split("-").map(Number);
+    const date = new Date(year, month - 1, day);
+    return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
   };
 
   return (
@@ -94,23 +108,24 @@ export function WeekCard({
 
       <View style={styles.tasksList}>
         {week.tasks.map((task) => (
+          // Whole row is tappable to toggle — consistent with HabitCard
           <Pressable
             key={task.id}
-            style={({ pressed }) => [
-              styles.taskItem,
-              pressed && styles.pressed
-            ]}
+            style={({ pressed }) => [styles.taskItem, pressed && styles.pressed]}
             onPress={() => handleToggle(task.id)}
           >
-            <View
-              style={[
-                styles.checkbox,
-                task.completed && styles.checkboxChecked,
-              ]}
-            >
-              {task.completed ? (
-                <Ionicons name="checkmark" size={14} color="#fff" />
-              ) : null}
+            {/* Checkbox is now a plain View; the outer Pressable handles toggle */}
+            <View style={styles.checkboxArea}>
+              <View
+                style={[
+                  styles.checkbox,
+                  task.completed && styles.checkboxChecked,
+                ]}
+              >
+                {task.completed ? (
+                  <Ionicons name="checkmark" size={14} color="#fff" />
+                ) : null}
+              </View>
             </View>
             <View style={styles.taskContent}>
               <View style={styles.daysBadge}>
@@ -121,6 +136,12 @@ export function WeekCard({
               >
                 {task.desc}
               </ThemedText>
+              {/* UX 7: Show completed date */}
+              {task.completed && task.completedDate ? (
+                <ThemedText style={styles.completedDateText}>
+                  Completed {formatCompletedDate(task.completedDate)}
+                </ThemedText>
+              ) : null}
               {task.resource ? (
                 <Pressable
                   style={({ pressed }) => [pressed && styles.pressed]}
@@ -150,7 +171,22 @@ export function WeekCard({
                 style={({ pressed }) => [styles.actionBtn, pressed && styles.pressed]}
                 onPress={(e) => {
                   e.stopPropagation();
-                  onDeleteTask(weekIndex, task.id);
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  Alert.alert(
+                    "Delete Task",
+                    "Are you sure you want to delete this task?",
+                    [
+                      { text: "No", style: "cancel" },
+                      {
+                        text: "Yes",
+                        style: "destructive",
+                        onPress: () => {
+                          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                          onDeleteTask(weekIndex, task.id);
+                        },
+                      },
+                    ]
+                  );
                 }}
                 hitSlop={8}
               >
@@ -186,23 +222,26 @@ export function WeekCard({
               placeholder="What do you need to do?"
               placeholderTextColor={AppColors.textSecondary}
               value={taskForm.desc}
-              onChangeText={(text) => setTaskForm((prev) => ({ ...prev, desc: text }))}
+              onChangeText={(text) => setTaskForm((prev) => ({ ...prev, desc: text.slice(0, 500) }))}
               multiline
+              maxLength={500}
             />
             <TextInput
               style={styles.modalInput}
               placeholder="Days (e.g., Days 1-3)"
               placeholderTextColor={AppColors.textSecondary}
               value={taskForm.days}
-              onChangeText={(text) => setTaskForm((prev) => ({ ...prev, days: text }))}
+              onChangeText={(text) => setTaskForm((prev) => ({ ...prev, days: text.slice(0, 50) }))}
+              maxLength={50}
             />
             <TextInput
               style={styles.modalInput}
-              placeholder="Resource link (optional)"
+              placeholder="Resource link (optional, e.g. facebook.com)"
               placeholderTextColor={AppColors.textSecondary}
               value={taskForm.resource}
-              onChangeText={(text) => setTaskForm((prev) => ({ ...prev, resource: text }))}
+              onChangeText={(text) => setTaskForm((prev) => ({ ...prev, resource: text.slice(0, 500) }))}
               keyboardType="url"
+              maxLength={500}
             />
             <View style={styles.modalButtons}>
               <Pressable
@@ -232,23 +271,26 @@ export function WeekCard({
               placeholder="Description"
               placeholderTextColor={AppColors.textSecondary}
               value={taskForm.desc}
-              onChangeText={(text) => setTaskForm((prev) => ({ ...prev, desc: text }))}
+              onChangeText={(text) => setTaskForm((prev) => ({ ...prev, desc: text.slice(0, 500) }))}
               multiline
+              maxLength={500}
             />
             <TextInput
               style={styles.modalInput}
               placeholder="Days"
               placeholderTextColor={AppColors.textSecondary}
               value={taskForm.days}
-              onChangeText={(text) => setTaskForm((prev) => ({ ...prev, days: text }))}
+              onChangeText={(text) => setTaskForm((prev) => ({ ...prev, days: text.slice(0, 50) }))}
+              maxLength={50}
             />
             <TextInput
               style={styles.modalInput}
-              placeholder="Resource link (optional)"
+              placeholder="Resource link (optional, e.g. facebook.com)"
               placeholderTextColor={AppColors.textSecondary}
               value={taskForm.resource}
-              onChangeText={(text) => setTaskForm((prev) => ({ ...prev, resource: text }))}
+              onChangeText={(text) => setTaskForm((prev) => ({ ...prev, resource: text.slice(0, 500) }))}
               keyboardType="url"
+              maxLength={500}
             />
             <View style={styles.modalButtons}>
               <Pressable
@@ -325,14 +367,18 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: "rgba(255,255,255,0.05)",
   },
+  // BUG 9: Separate touch area for checkbox
+  checkboxArea: {
+    padding: 2,
+    marginRight: Spacing.md,
+    marginTop: 2,
+  },
   checkbox: {
     width: 20,
     height: 20,
     borderRadius: 4,
     borderWidth: 2,
     borderColor: AppColors.textSecondary,
-    marginRight: Spacing.md,
-    marginTop: 2,
     justifyContent: "center",
     alignItems: "center",
   },
@@ -364,6 +410,13 @@ const styles = StyleSheet.create({
   taskDescCompleted: {
     textDecorationLine: "line-through",
     color: AppColors.textSecondary,
+  },
+  // UX 7: Completed date style
+  completedDateText: {
+    fontSize: 11,
+    color: AppColors.primary,
+    marginBottom: 4,
+    fontStyle: "italic",
   },
   resourceLink: {
     fontSize: 12,
@@ -446,6 +499,7 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.md,
     borderRadius: BorderRadius.xs,
     alignItems: "center",
+    justifyContent: "center",
   },
   cancelBtn: {
     backgroundColor: AppColors.border,
@@ -453,6 +507,8 @@ const styles = StyleSheet.create({
   cancelBtnText: {
     color: AppColors.textPrimary,
     fontWeight: "600",
+    fontSize: 14,
+    textAlign: "center",
   },
   saveBtn: {
     backgroundColor: AppColors.primary,
@@ -460,6 +516,8 @@ const styles = StyleSheet.create({
   saveBtnText: {
     color: "#fff",
     fontWeight: "600",
+    fontSize: 14,
+    textAlign: "center",
   },
   pressed: {
     opacity: 0.7,

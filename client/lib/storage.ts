@@ -41,6 +41,13 @@ export interface ReminderSettings {
   customReminders: Reminder[];
 }
 
+export interface AnalyticsCache {
+  bestStreak: number;
+  totalHabitsCompleted: number;
+  powerDays: string[];
+  lastComputedAt: string;
+}
+
 const STORAGE_KEYS = {
   HABITS: "monthly_todo_habits",
   HABIT_HISTORY: "monthly_todo_habit_history",
@@ -48,11 +55,12 @@ const STORAGE_KEYS = {
   TASK_PROGRESS: "monthly_todo_task_progress",
   REMINDERS: "monthly_todo_reminders",
   REMINDER_SETTINGS: "monthly_todo_reminder_settings",
+  ANALYTICS_CACHE: "monthly_todo_analytics_cache",
 };
 
 const defaultHabits: Habit[] = [
-  { id: "habit_1", label: "Morning routine" },
-  { id: "habit_2", label: "Read 30 minutes" },
+  { id: "habit_1", label: "5 Waqt salah" },
+  { id: "habit_2", label: "1hr coding prac" },
   { id: "habit_3", label: "Exercise" },
   { id: "habit_4", label: "Learn something new" },
 ];
@@ -97,7 +105,13 @@ export async function getHabits(): Promise<Habit[]> {
   try {
     const data = await AsyncStorage.getItem(STORAGE_KEYS.HABITS);
     if (data) {
-      return JSON.parse(data);
+      const parsed = JSON.parse(data);
+      // SECURITY 4: Validate data structure after parse
+      if (!Array.isArray(parsed)) {
+        await AsyncStorage.setItem(STORAGE_KEYS.HABITS, JSON.stringify(defaultHabits));
+        return defaultHabits;
+      }
+      return parsed;
     }
     await AsyncStorage.setItem(STORAGE_KEYS.HABITS, JSON.stringify(defaultHabits));
     return defaultHabits;
@@ -114,7 +128,7 @@ export async function addHabit(label: string): Promise<Habit[]> {
   const habits = await getHabits();
   const newHabit: Habit = {
     id: `habit_${Date.now()}`,
-    label,
+    label: label.slice(0, 100), // SECURITY 1: limit length
   };
   const updated = [...habits, newHabit];
   await saveHabits(updated);
@@ -148,7 +162,15 @@ export async function deleteHabit(habitId: string): Promise<Habit[]> {
 export async function getHabitHistory(): Promise<HabitHistory> {
   try {
     const data = await AsyncStorage.getItem(STORAGE_KEYS.HABIT_HISTORY);
-    return data ? JSON.parse(data) : {};
+    if (data) {
+      const parsed = JSON.parse(data);
+      // SECURITY 4: Validate data structure — must be an object (not array/null)
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+        return {};
+      }
+      return parsed;
+    }
+    return {};
   } catch {
     return {};
   }
@@ -168,11 +190,29 @@ export async function toggleHabitForToday(habitId: string, date: string): Promis
   return history;
 }
 
+export async function completeAllHabitsForToday(habitIds: string[], date: string): Promise<HabitHistory> {
+  const history = await getHabitHistory();
+  if (!history[date]) {
+    history[date] = {};
+  }
+  for (const id of habitIds) {
+    history[date][id] = true;
+  }
+  await saveHabitHistory(history);
+  return history;
+}
+
 export async function getWeeks(): Promise<Week[]> {
   try {
     const data = await AsyncStorage.getItem(STORAGE_KEYS.WEEKS);
     if (data) {
-      return JSON.parse(data);
+      const parsed = JSON.parse(data);
+      // SECURITY 4: Validate data structure
+      if (!Array.isArray(parsed)) {
+        await AsyncStorage.setItem(STORAGE_KEYS.WEEKS, JSON.stringify(defaultWeeks));
+        return defaultWeeks;
+      }
+      return parsed;
     }
     await AsyncStorage.setItem(STORAGE_KEYS.WEEKS, JSON.stringify(defaultWeeks));
     return defaultWeeks;
@@ -251,6 +291,7 @@ export async function resetAllData(): Promise<void> {
     STORAGE_KEYS.TASK_PROGRESS,
     STORAGE_KEYS.REMINDERS,
     STORAGE_KEYS.REMINDER_SETTINGS,
+    STORAGE_KEYS.ANALYTICS_CACHE,
   ]);
 }
 
@@ -288,7 +329,15 @@ export function calculateProgress(weeks: Week[]): { completed: number; total: nu
 export async function getReminders(): Promise<Reminder[]> {
   try {
     const data = await AsyncStorage.getItem(STORAGE_KEYS.REMINDERS);
-    return data ? JSON.parse(data) : [];
+    if (data) {
+      const parsed = JSON.parse(data);
+      // SECURITY 4: Validate data structure
+      if (!Array.isArray(parsed)) {
+        return [];
+      }
+      return parsed;
+    }
+    return [];
   } catch {
     return [];
   }
@@ -302,6 +351,7 @@ export async function addReminder(reminder: Omit<Reminder, "id">): Promise<Remin
   const reminders = await getReminders();
   const newReminder: Reminder = {
     ...reminder,
+    message: reminder.message.slice(0, 200), // SECURITY 1: limit length
     id: `reminder_${Date.now()}`,
   };
   const updated = [...reminders, newReminder];
@@ -329,9 +379,20 @@ export async function deleteReminder(reminderId: string): Promise<Reminder[]> {
 export async function getReminderSettings(): Promise<ReminderSettings> {
   try {
     const data = await AsyncStorage.getItem(STORAGE_KEYS.REMINDER_SETTINGS);
-    return data ? JSON.parse(data) : { useDefault: true, customReminders: [] };
+    if (data) {
+      const parsed = JSON.parse(data);
+      // SECURITY 4: Validate data structure
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+        return { useDefault: false, customReminders: [] };
+      }
+      if (typeof parsed.useDefault !== "boolean") {
+        return { useDefault: false, customReminders: [] };
+      }
+      return parsed;
+    }
+    return { useDefault: false, customReminders: [] };
   } catch {
-    return { useDefault: true, customReminders: [] };
+    return { useDefault: false, customReminders: [] };
   }
 }
 
@@ -343,7 +404,7 @@ export async function updateHabit(habitId: string, label: string): Promise<Habit
   const habits = await getHabits();
   const index = habits.findIndex((h) => h.id === habitId);
   if (index !== -1) {
-    habits[index].label = label;
+    habits[index].label = label.slice(0, 100); // SECURITY 1: limit length
     await saveHabits(habits);
   }
   return habits;
@@ -369,3 +430,24 @@ export const getDefaultReminders = (): Reminder[] => {
   ];
 };
 
+// ─── Analytics Cache ───────────────────────────────────────────────
+
+export async function getAnalyticsCache(): Promise<AnalyticsCache | null> {
+  try {
+    const data = await AsyncStorage.getItem(STORAGE_KEYS.ANALYTICS_CACHE);
+    if (data) {
+      const parsed = JSON.parse(data);
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+        return null;
+      }
+      return parsed;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export async function saveAnalyticsCache(cache: AnalyticsCache): Promise<void> {
+  await AsyncStorage.setItem(STORAGE_KEYS.ANALYTICS_CACHE, JSON.stringify(cache));
+}
